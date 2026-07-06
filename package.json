@@ -1,6 +1,6 @@
 {
-  "name": "@sarveshsonkusre02/nv-protocol",
-  "version": "0.1.4",
+  "name": "@sarveshsonkusre/nv-protocol",
+  "version": "0.1.6",
   "description": "Context-Isolated Secret Management for Autonomous AI Software Engineering Agents",
   "main": "bin_redirect.js",
   "bin": {
