@@ -1,0 +1,35 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - 'v*' # Fires alongside your npm updates when you push version tags
+
+jobs:
+  pypi-publish:
+    name: Upload release to PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/nv-protocol
+    permissions:
+      id-token: write  # MANDATORY: For tokenless OIDC security authentication
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: python -m pip install --upgrade build
+
+      - name: Build package distribution files
+        run: python -m build
+
+      # Uses the official PyPI trusted publishing action - completely tokenless!
+      - name: Publish target to PyPI
+        uses: pypa/jwt-publisher@main

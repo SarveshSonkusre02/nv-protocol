@@ -1,27 +1,25 @@
 [build-system]
-requires = ["setuptools>=61.0.0", "wheel"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "nv-protocol"
 version = "0.1.0"
-authors = [
-    { name = "Open-Source Software Security Initiative", email = "info@nvprotocol.org" }
-]
 description = "Context-Isolated Secret Management for Autonomous AI Software Engineering Agents"
 readme = "README.md"
 requires-python = ">=3.8"
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: Microsoft :: Windows",
+license = {text = "MIT"}
+authors = [
+    {name = "Open-Source Software Security Initiative"}
 ]
-dependencies = [
-    "cryptography>=39.0.0"
-]
+keywords = ["security", "credentials", "secret-manager", "ai-agents", "llm"]
+
+[project.urls]
+Homepage = "https://github.com/SarveshSonkusre02/nv-protocol"
 
 [project.scripts]
-nvenv = "nv:main"
+nvenv = "py_wrapper.cli:main" # This registers the 'nvenv' command globally on pip install
 
 [tool.setuptools]
-py-modules = ["nv", "vault", "ca", "proxy", "runner", "git"]
+packages = ["py_wrapper"]
+include-package-data = true
