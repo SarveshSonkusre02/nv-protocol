@@ -4,7 +4,7 @@
   "description": "Context-Isolated Secret Management for Autonomous AI Software Engineering Agents",
   "main": "bin_redirect.js",
   "bin": {
-    "nvenv": "./bin_redirect.js"
+    "nvenv": "bin_redirect.js"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
