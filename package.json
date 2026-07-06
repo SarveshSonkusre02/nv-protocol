@@ -33,11 +33,11 @@
   "author": "Open-Source Software Security Initiative",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/oss-security/nv-protocol/issues"
+    "url": "https://github.com/SarveshSonkusre02/nv-protocol/issues"
   },
-  "homepage": "https://github.com/oss-security/nv-protocol#readme",
+  "homepage": "https://github.com/SarveshSonkusre02/nv-protocol#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/oss-security/nv-protocol.git"
+    "url": "git+https://github.com/SarveshSonkusre02/nv-protocol.git"
   }
 }
