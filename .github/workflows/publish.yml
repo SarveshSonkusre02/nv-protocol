@@ -3,7 +3,7 @@ name: Publish to npm
 on:
   push:
     tags:
-      - 'v*' # Triggers the workflow when you push a tag like v0.1.0
+      - 'v*'
 
 jobs:
   publish:
@@ -11,7 +11,7 @@ jobs:
     
     permissions:
       contents: read
-      id-token: write # Required for generating the secure --provenance build proof
+      id-token: write
 
     steps:
       - name: Checkout repository
@@ -21,13 +21,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: 'https://registry.npmjs.org' # Tells Node to look for credentials for this registry
 
       - name: Install dependencies
         run: npm ci
 
-      # This step consumes the temporary GitHub repository secret for the 1st run
       - name: Publish to npm
         run: npm publish --provenance
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} # Binds seamlessly now that registry-url is bound above
