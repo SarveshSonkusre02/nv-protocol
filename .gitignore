@@ -1,0 +1,32 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local SQLite databases (including our secure vault)
+*.db
+vault.db
+~/.nv/vault.db
+
+# CA and TLS certificates generated locally
+*.crt
+*.key
+certs/
+.nv_tmp_ca.crt
+
+# PyInstaller build directories and configs
+build/
+dist/
+*.spec
+
+# Node.js dependencies
+node_modules/
+package-lock.json
+
+# Environment configuration files (never check these in!)
+.env
+.env.local
+.env.*
+.venv/
+env/
+venv/

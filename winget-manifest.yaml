@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://github.com/microsoft/winget-cli/releases/latest/download/manifest.singleton.1.4.0.json
+PackageIdentifier: OpenSourceSecurity.nv
+PackageVersion: 0.1.0
+PackageName: nv
+Publisher: Open-Source Software Security Initiative
+License: MIT
+LicenseUrl: https://github.com/oss-security/nv-protocol/blob/main/LICENSE
+ShortDescription: Context-Isolated Secret Management for Autonomous AI Software Engineering Agents
+Moniker: nv
+Tags:
+  - security
+  - secrets
+  - env
+  - developer-tools
+  - ai-agents
+  - privacy
+  - credentials
+Installers:
+  - Architecture: x64
+    InstallerType: portable
+    # Points to the compiled Windows binary hosted on GitHub Releases
+    InstallerUrl: https://github.com/oss-security/nv-protocol/releases/download/v0.1.0/nv-windows-x64.exe
+    # Replace this with the SHA-256 hash of the compiled nv.exe (e.g. certutil -hashfile nv.exe SHA256)
+    InstallerSha256: <SHA256_HASH_OF_EXE_HERE>
+    UpgradeBehavior: uninstallPrevious
+ManifestType: singleton
+ManifestVersion: 1.4.0

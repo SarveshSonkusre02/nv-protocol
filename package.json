@@ -1,0 +1,28 @@
+{
+  "name": "nv-protocol",
+  "version": "0.1.0",
+  "description": "Context-Isolated Secret Management for Autonomous AI Software Engineering Agents",
+  "main": "bin_redirect.js",
+  "bin": {
+    "nvenv": "./bin_redirect.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "security",
+    "credentials",
+    "secret-manager",
+    "ai-agents",
+    "llm",
+    "privacy",
+    "zero-knowledge",
+    "windows-dpapi"
+  ],
+  "author": "Open-Source Software Security Initiative",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/oss-security/nv-protocol/issues"
+  },
+  "homepage": "https://github.com/oss-security/nv-protocol#readme"
+}
