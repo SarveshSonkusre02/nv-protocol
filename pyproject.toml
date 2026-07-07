@@ -4,28 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nv-protocol"
-version = "2.0.0"
+version = "2.0.1"
 description = "Context-Isolated Secret Management for Autonomous AI Software Engineering Agents"
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "MIT"}
+license = { text = "MIT" }
+
 authors = [
-    {name = "Open-Source Software Security Initiative"}
+    { name = "Open-Source Software Security Initiative" }
 ]
-keywords = ["security", "credentials", "secret-manager", "ai-agents", "llm"]
 
-[project.urls]
-Homepage = "https://github.com/SarveshSonkusre02/nv-protocol"
-
-[project.scripts]
-nvenv = "py_wrapper.cli:main" # This registers the 'nvenv' command globally on pip install
-
-[tool.setuptools]
-packages = ["py_wrapper"]
-
-# This forces the build engine to copy the JS script into the distribution package
-[tool.setuptools.package-data]
-"*" = ["bin_redirect.js", "package.json", "README.md"]
+keywords = [
+    "security",
+    "credentials",
+    "secret-manager",
+    "ai-agents",
+    "llm"
+]
 
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -34,5 +29,22 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
-    "Topic :: Security",
+    "Topic :: Security"
+]
+
+[project.urls]
+Homepage = "https://github.com/SarveshSonkusre02/nv-protocol"
+Repository = "https://github.com/SarveshSonkusre02/nv-protocol"
+Issues = "https://github.com/SarveshSonkusre02/nv-protocol/issues"
+
+[project.scripts]
+nvenv = "py_wrapper.cli:main"
+
+[tool.setuptools]
+packages = ["py_wrapper"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+py_wrapper = [
+    "bin_redirect.js"
 ]

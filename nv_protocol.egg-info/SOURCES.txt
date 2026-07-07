@@ -6,4 +6,5 @@ nv_protocol.egg-info/dependency_links.txt
 nv_protocol.egg-info/entry_points.txt
 nv_protocol.egg-info/top_level.txt
 py_wrapper/__init__.py
+py_wrapper/bin_redirect.js
 py_wrapper/cli.py
