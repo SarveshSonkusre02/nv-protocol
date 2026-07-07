@@ -3,16 +3,18 @@ import sys
 import subprocess
 
 def main():
-    # Locates the bin_redirect.js file relative to the installed package
+    # 1. Find exactly where this cli.py file lives inside site-packages
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    js_path = os.path.abspath(os.path.join(current_dir, "..", "bin_redirect.js"))
     
+    # 2. Step up one folder level to find bin_redirect.js inside the root installation directory
+    js_path = os.path.abspath(os.path.join(current_dir, "..", "bin_redirect.js"))
+
+    # If it's not found there, check if it was installed inside the py_wrapper folder itself
     if not os.path.exists(js_path):
-        # Fallback if installed differently
-        js_path = "bin_redirect.js"
+        js_path = os.path.join(current_dir, "bin_redirect.js")
 
     try:
-        # Executes node bin_redirect.js passing down all CLI arguments
+        # 3. Pass the absolute calculated path down to Node execution layer
         result = subprocess.run(["node", js_path] + sys.argv[1:])
         sys.exit(result.returncode)
     except FileNotFoundError:

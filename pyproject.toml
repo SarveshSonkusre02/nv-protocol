@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nv-protocol"
-version = "0.1.9"
+version = "0.2.1"
 description = "Context-Isolated Secret Management for Autonomous AI Software Engineering Agents"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -22,4 +22,7 @@ nvenv = "py_wrapper.cli:main" # This registers the 'nvenv' command globally on p
 
 [tool.setuptools]
 packages = ["py_wrapper"]
-include-package-data = true
+
+# This forces the build engine to copy the JS script into the distribution package
+[tool.setuptools.package-data]
+"*" = ["bin_redirect.js", "package.json", "README.md"]
