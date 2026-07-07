@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nv-protocol"
-version = "0.2.1"
+version = "2.0.0-beta.1"
 description = "Context-Isolated Secret Management for Autonomous AI Software Engineering Agents"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -26,3 +26,13 @@ packages = ["py_wrapper"]
 # This forces the build engine to copy the JS script into the distribution package
 [tool.setuptools.package-data]
 "*" = ["bin_redirect.js", "package.json", "README.md"]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Topic :: Security",
+]

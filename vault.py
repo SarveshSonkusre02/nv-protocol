@@ -80,6 +80,13 @@ def decrypt_dpapi(encrypted_data: bytes) -> bytes:
             ctypes.windll.kernel32.LocalFree(data_out.pbData)
 
 
+def wipe_bytes(b: bytearray):
+    """Zeros out a mutable bytearray buffer in-place."""
+    if isinstance(b, bytearray):
+        for i in range(len(b)):
+            b[i] = 0
+
+
 class Vault:
     """SQLite-backed encrypted vault utilizing Windows DPAPI."""
     def __init__(self, db_path=None):
@@ -133,6 +140,20 @@ class Vault:
                 return None
             decrypted_bytes = decrypt_dpapi(row[0])
             return decrypted_bytes.decode('utf-8')
+        finally:
+            conn.close()
+
+    def get_bytes(self, key: str) -> bytearray:
+        """Retrieves and decrypts a secret from the vault as a mutable bytearray. Returns None if key doesn't exist."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT ciphertext FROM secrets WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            decrypted_bytes = decrypt_dpapi(row[0])
+            return bytearray(decrypted_bytes)
         finally:
             conn.close()
 
