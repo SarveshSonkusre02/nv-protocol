@@ -30,10 +30,11 @@ def main():
     print("Compiling code structure into zero-dependency native binary...")
     try:
         PyInstaller.__main__.run([
-            'nv.py',
+            os.path.join('py_wrapper', 'nv.py'),
             '--onefile',
             '--name=nvenv',
             '--clean',
+            '--paths=py_wrapper',
         ])
     except Exception as e:
         print(f"Compilation pipeline failed: {e}", file=sys.stderr)
@@ -56,7 +57,7 @@ def main():
         for folder in ["build", "dist"]:
             if os.path.exists(folder):
                 shutil.rmtree(folder)
-        spec_file = "nv.spec"
+        spec_file = "nvenv.spec"
         if os.path.exists(spec_file):
             os.remove(spec_file)
             

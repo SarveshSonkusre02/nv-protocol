@@ -9,8 +9,9 @@ import urllib.request
 import urllib.error
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# Add current path to imports
+# Add current path and py_wrapper path to imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "py_wrapper"))
 
 from vault import Vault, encrypt_dpapi, decrypt_dpapi, wipe_bytes
 from ca import CertificateAuthority
