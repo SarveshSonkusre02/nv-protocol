@@ -1,0 +1,17 @@
+name: Publish to WinGet
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  winget:
+    name: Submit manifest to WinGet
+    runs-on: windows-latest
+    steps:
+      - name: Submit to WinGet Community Repository
+        uses: vedantmgoyal2009/winget-releaser@v2
+        with:
+          identifier: SarveshSonkusre.nv-protocol
+          max-versions-to-keep: 5
+          token: ${{ secrets.WINGET_PAT }}

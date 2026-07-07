@@ -1,0 +1,2 @@
+[console_scripts]
+nvenv = py_wrapper.cli:main
