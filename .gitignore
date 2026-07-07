@@ -30,3 +30,5 @@ package-lock.json
 .venv/
 env/
 venv/
+# npm package artifacts
+*.tgz

@@ -36,10 +36,10 @@ if (fs.existsSync(binaryPath)) {
         // Resolve target python command
         const pythonCmd = platform === 'win32' ? 'python' : 'python3';
         const childArgs = [devScriptPath, ...args];
-        
+
         // Use shell context for Windows fallback execution stability
         const useShell = platform === 'win32';
-        
+
         const child = spawn(pythonCmd, childArgs, { stdio: 'inherit', shell: useShell });
         child.on('close', (code) => {
             process.exit(code === null ? 1 : code);
