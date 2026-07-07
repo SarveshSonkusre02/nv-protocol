@@ -6,232 +6,198 @@
 
 **nvenv** is a **local-first cryptographic proxy** designed to decouple raw credentials from the viewable workspace of autonomous AI software engineering agents such as **Cursor**, **Claude Code**, **Windsurf**, and **Devin**.
 
-Instead of exposing secrets through `.env` files or shell environment variables, **nvenv** replaces them with secure cryptographic URI placeholders. During outbound network communication, the proxy dynamically substitutes placeholders with real credentials **only in volatile memory** at the OS socket boundary during TLS handshakes.
+Instead of exposing secrets through traditional `.env` files or shell environment variables, **nvenv** replaces them with secure cryptographic URI placeholders (`nv://KEY_NAME`). During outbound network communication, the proxy transparently substitutes placeholders with the real credentials **only in volatile memory**, immediately before the TLS request leaves the machine.
 
-This allows applications to execute normally while keeping autonomous AI agents mathematically blind to the underlying credentials.
+Applications continue to work normally while autonomous AI agents remain unable to access plaintext credentials.
 
 ---
 
 # ⚡ Quick Start
 
-Install globally using your preferred ecosystem.
+## Install Globally (Recommended)
 
-## Node.js
+### Node.js
 
 ```bash
 npm install -g nv-protocol
 ```
 
-## Python
+### Python
 
 ```bash
 pip install nv-protocol
 ```
 
-## Windows (Planned)
-
-> **Validation Pending**
+### Windows Package Manager *(Coming Soon)*
 
 ```bash
 winget install SarveshSonkusre.nv-protocol
+```
+
+Verify installation:
+
+```bash
+nvenv --help
+```
+
+---
+
+# 📦 Installation Options
+
+## Global Installation
+
+Recommended if you want the `nvenv` command available everywhere.
+
+### npm
+
+```bash
+npm install -g nv-protocol
+```
+
+### PyPI
+
+```bash
+pip install nv-protocol
+```
+
+---
+
+## Local Project Installation (Node.js)
+
+Install only inside the current project.
+
+```bash
+npm install nv-protocol
+```
+
+Run using:
+
+```bash
+npx nvenv --help
+```
+
+or from your package scripts.
+
+---
+
+## Install From Source
+
+```bash
+git clone https://github.com/SarveshSonkusre02/nv-protocol.git
+
+cd nv-protocol
+
+pip install -e .
+```
+
+---
+
+# ✅ Verify Installation
+
+Display the CLI help.
+
+```bash
+nvenv --help
+```
+
+Expected output:
+
+```text
+nvenv (No-View Env) - Context-Isolated Secret Management CLI
+```
+
+Verify installed package.
+
+### npm
+
+```bash
+npm list -g nv-protocol
+```
+
+### PyPI
+
+```bash
+pip show nv-protocol
 ```
 
 ---
 
 # ❓ Why nvenv?
 
-Traditional `.env` files and shell environment variables inject plaintext secrets directly into:
+Traditional secret management exposes credentials directly inside:
 
+- `.env`
 - `process.env`
 - `os.environ`
+- shell exports
 
-This exposes credentials to:
+This means secrets become visible to:
 
 - AI coding agents
 - Third-party dependencies
-- Build scripts
+- Build systems
 - Prompt injection attacks
-- Memory scraping
+- Memory scraping tools
 
-**nvenv** moves secret injection to the **network layer**, preventing untrusted processes from ever seeing the real credentials.
+**nvenv** shifts credential injection from the application layer to the **network layer**, ensuring applications authenticate normally while secrets never become part of the AI-visible execution context.
 
 ---
 
-# Security Comparison
+# 🔒 Security Comparison
 
 | Security Vector | Legacy `.env` / Shell Export | **nvenv** |
 |-----------------|-----------------------------|-----------|
-| Process Environment | ❌ Plaintext keys visible | 🛡️ Empty placeholders only |
-| Prompt Injection | ❌ AI can print secrets | 🛡️ Agent never possesses secrets |
-| Dependency Scraping | ❌ Malicious packages can read env | 🛡️ No credentials available |
-| Authentication Scope | ❌ Every process inherits credentials | 🛡️ Injected only for authorized outbound requests |
+| Process Environment | ❌ Plaintext credentials | ✅ Placeholder only |
+| Prompt Injection | ❌ Secrets can be printed | ✅ AI never receives secrets |
+| Dependency Scraping | ❌ Packages can read env vars | ✅ No credentials available |
+| Authentication Scope | ❌ Shared with every process | ✅ Injected only into authorized outbound requests |
+| Secret Lifetime | ❌ Entire process lifetime | ✅ Exists only during request execution |
 
 ---
 
-# How It Works
+# 🏗 Architecture
 
 ```text
+Developer
+
+        │
+
+        ▼
+
 Application
-Reads:
+Reads
 
-Authorization: Bearer nv://STRIPE_KEY
+OPENAI_API_KEY=nv://OPENAI_API_KEY
 
-            │
-            │ HTTP Request
-            ▼
+        │
 
-┌──────────────────────────────────┐
-│      Local nvenv Proxy           │
-├──────────────────────────────────┤
-│ • Intercepts outbound request    │
-│ • Queries encrypted vault        │
-│ • Decrypts secret in memory      │
-│ • Replaces placeholder           │
-│ • Continues TLS connection       │
-└──────────────────────────────────┘
-            │
-            ▼
+        ▼
 
-api.stripe.com
+────────────────────────────────────────────
 
-Receives:
+           nvenv Proxy
 
-Authorization: Bearer sk_live_xxxxxxxxx
+• Validate destination
+• Retrieve encrypted secret
+• Decrypt in volatile memory
+• Replace placeholder
+• Forward TLS request
+
+        │
+
+        ▼
+
+External API
+
+Authorization:
+Bearer sk-xxxxxxxxxxxxxxxx
 ```
 
 ---
 
-# Core Security Features
+# 🚀 Quick Start
 
-## 🛡️ Contextual Blindness
-
-Your:
-
-- source code
-- `.env`
-- terminal output
-- logs
-- shell variables
-
-contain only placeholders such as
-
-```text
-nv://STRIPE_KEY
-```
-
-Secrets never enter the LLM context window.
-
----
-
-## 🔐 Hardware-Backed Vault
-
-On Windows, credentials are stored inside
-
-```text
-~/.nv/vault.db
-```
-
-using:
-
-- SQLite
-- Windows DPAPI encryption
-
-Secrets are cryptographically bound to the current Windows user.
-
----
-
-## 🔄 Active TLS Interception
-
-The runtime launches a local loopback MITM proxy that:
-
-- generates certificates dynamically
-- intercepts outbound HTTPS
-- swaps placeholders
-- forwards requests transparently
-
-Applications remain unaware of the substitution.
-
----
-
-## 🤖 AI Agent Anti-Scraping Protection
-
-Commands such as
-
-```bash
-nvenv get STRIPE_KEY
-```
-
-cannot be abused through:
-
-- pipes
-- redirected output
-- automation
-
-Protections include:
-
-- `isatty()` verification
-- interactive console detection
-- low-level keyboard confirmation
-
-Only a real interactive user may reveal secrets.
-
----
-
-## 🔑 Git Credential Helper
-
-nvenv integrates with Git using:
-
-```text
-credential.helper
-```
-
-GitHub Personal Access Tokens (PATs) are injected directly into Git's authentication pipeline without storing them in:
-
-- `.gitconfig`
-- environment variables
-- repository files
-
----
-
-# Installation
-
-## 1. NPM Distribution
-
-```bash
-npm install -g nv-protocol
-```
-
----
-
-## 2. Python Distribution
-
-```bash
-pip install nv-protocol
-```
-
----
-
-## 3. Source Installation
-
-Clone the repository and install locally.
-
-```bash
-pip install -e .
-```
-
-This registers the global CLI command:
-
-```bash
-nvenv
-```
-
----
-
-# Quickstart
-
-## Step 1 — Initialize Vault
-
-Create your encrypted credential database.
+## Initialize the Vault
 
 ```bash
 nvenv init
@@ -239,37 +205,31 @@ nvenv init
 
 ---
 
-## Step 2 — Store Secrets
+## Store a Secret
 
 ```bash
-nvenv set STRIPE_KEY
+nvenv set OPENAI_API_KEY
 ```
-
-The CLI securely prompts for the value and prints a placeholder.
 
 ---
 
-## Step 3 — Replace `.env`
+## Replace Your `.env`
 
 Instead of:
 
 ```env
-STRIPE_KEY=sk_live_xxxxxxxxx
-DATABASE_URL=postgres://...
+OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxx
 ```
 
 Use:
 
 ```env
-STRIPE_KEY=nv://STRIPE_KEY
-DATABASE_URL=nv://DATABASE_URL
+OPENAI_API_KEY=nv://OPENAI_API_KEY
 ```
 
 ---
 
-## Step 4 — Run Through nvenv
-
-Instead of launching your application directly, wrap it.
+## Run Your Application
 
 ### Node.js
 
@@ -280,22 +240,136 @@ nvenv run -- npm run dev
 ### Python
 
 ```bash
-nvenv run -- python main.py
+nvenv run -- python app.py
 ```
-
-### Curl
-
-```bash
-nvenv run -- curl \
-  -H "Authorization: Bearer nv://STRIPE_KEY" \
-  https://httpbin.org/headers
-```
-
-Applications receive real credentials transparently while every visible environment still contains only placeholders.
 
 ---
 
-# Git Integration
+## List Stored Secrets
+
+```bash
+nvenv list
+```
+
+---
+
+# ⚙️ How It Works
+
+```text
+Application
+
+Authorization:
+Bearer nv://OPENAI_API_KEY
+
+           │
+
+           ▼
+
+┌───────────────────────────────┐
+│         nvenv Proxy           │
+├───────────────────────────────┤
+│ • Intercepts request          │
+│ • Reads encrypted vault       │
+│ • Decrypts in RAM             │
+│ • Replaces placeholder        │
+│ • Sends HTTPS request         │
+└───────────────────────────────┘
+
+           │
+
+           ▼
+
+api.openai.com
+
+Authorization:
+Bearer sk-xxxxxxxxxxxxxxxx
+```
+
+---
+
+# 🛡 Core Security Features
+
+## Context Isolation
+
+Your:
+
+- source code
+- `.env`
+- terminal
+- logs
+- shell variables
+
+contain only placeholders.
+
+```text
+OPENAI_API_KEY=nv://OPENAI_API_KEY
+```
+
+Secrets never become visible inside an AI context window.
+
+---
+
+## Hardware-Backed Vault
+
+Windows stores credentials inside:
+
+```text
+~/.nv/vault.db
+```
+
+using:
+
+- SQLite
+- Windows DPAPI encryption
+
+Secrets are cryptographically bound to the current Windows user account.
+
+---
+
+## Memory-Only Secret Injection
+
+Credentials are:
+
+- decrypted only when needed
+- never stored inside environment variables
+- never written to disk
+- wiped immediately after request completion
+
+---
+
+## HTTPS Proxy Injection
+
+The runtime launches a local HTTPS interception proxy which:
+
+- validates destinations
+- decrypts secrets
+- replaces placeholders
+- forwards encrypted traffic
+
+Applications remain unaware that substitution occurred.
+
+---
+
+## AI Agent Protection
+
+Commands such as
+
+```bash
+nvenv get OPENAI_API_KEY
+```
+
+cannot be abused through:
+
+- redirected output
+- pipes
+- automated execution
+- non-interactive sessions
+
+The CLI verifies that a real interactive user is present before revealing secrets.
+
+---
+
+## Git Credential Helper
 
 Store your GitHub Personal Access Token.
 
@@ -309,76 +383,166 @@ Configure Git.
 git config --local credential.helper "!nvenv git-helper"
 ```
 
-Git authentication now occurs using credentials retrieved directly from the secure vault.
+Git retrieves credentials directly from the encrypted vault without exposing tokens through:
 
-No tokens appear inside:
-
-- repository files
-- shell history
 - environment variables
+- shell history
+- repository files
+- `.gitconfig`
 
 ---
 
-# Verification
+# 💻 Platform Support
 
-Run the internal test suite.
+| Platform | Status |
+|----------|--------|
+| Windows | ✅ Stable |
+| Linux | 🚧 In Progress |
+| macOS | 🚧 In Progress |
+| npm | ✅ Available |
+| PyPI | ✅ Available |
+| WinGet | ⏳ Pending |
+
+---
+
+# 🧪 Verification
+
+Run the built-in tests.
 
 ```bash
 python test_nv.py
 ```
 
-Tests include:
+Coverage includes:
 
+- ✅ Vault CRUD
 - ✅ Windows DPAPI encryption
-- ✅ Vault CRUD operations
-- ✅ Socket payload replacement
-- ✅ HTTP interception
 - ✅ Placeholder substitution
-- ✅ End-to-end runtime verification
+- ✅ HTTPS interception
+- ✅ Runtime injection
+- ✅ End-to-end verification
 
 ---
 
-# Example Workflow
+# 📈 Example Workflow
 
 ```text
 Developer
 
-│
+     │
 
-├── Stores API Key
-│      │
-│      ▼
-│   nvenv set STRIPE_KEY
-│
-├── .env
-│      │
-│      ▼
-│ STRIPE_KEY=nv://STRIPE_KEY
-│
-├── Launch
-│      │
-│      ▼
-│ nvenv run -- npm run dev
-│
-└──────────────► Local Proxy
-                    │
-                    ▼
-           Placeholder Replacement
-                    │
-                    ▼
-             External API Service
+     ▼
+
+nvenv set OPENAI_API_KEY
+
+     │
+
+     ▼
+
+Encrypted Vault
+
+     │
+
+     ▼
+
+.env
+
+OPENAI_API_KEY=nv://OPENAI_API_KEY
+
+     │
+
+     ▼
+
+nvenv run -- npm run dev
+
+     │
+
+     ▼
+
+Application
+
+     │
+
+     ▼
+
+nvenv Proxy
+
+     │
+
+     ▼
+
+Placeholder Replacement
+
+     │
+
+     ▼
+
+OpenAI API
 ```
 
 ---
 
-# Philosophy
+# 🎯 Philosophy
 
-Traditional secret managers focus on protecting secrets **at rest**.
+Traditional secret managers primarily protect credentials **at rest**.
 
-**nvenv** focuses on protecting secrets **during execution**, ensuring autonomous AI systems, third-party packages, and prompt injection attacks never gain access to plaintext credentials while applications continue to operate normally.
+**nvenv** focuses on protecting credentials **during execution**, preventing autonomous AI systems, third-party packages, and prompt injection attacks from ever accessing plaintext secrets while preserving the existing application workflow.
 
 ---
 
-# License
+# 🗺 Roadmap
+
+- ✅ npm Distribution
+- ✅ PyPI Distribution
+- ⏳ WinGet Distribution
+- ⏳ Homebrew Formula
+- ⏳ Native Linux Secret Backend
+- ⏳ Native macOS Keychain Backend
+- ⏳ Docker Integration
+- ⏳ VS Code Extension
+
+---
+
+# 📝 Notes
+
+### Global npm installation
+
+```bash
+npm install -g nv-protocol
+```
+
+Installs the `nvenv` command globally.
+
+---
+
+### Local npm installation
+
+```bash
+npm install nv-protocol
+```
+
+Installs the package only inside the current project.
+
+Use:
+
+```bash
+npx nvenv
+```
+
+or reference it from your project's scripts.
+
+---
+
+### Python installation
+
+```bash
+pip install nv-protocol
+```
+
+Installs the `nvenv` command globally into the active Python environment.
+
+---
+
+# 📄 License
 
 Released under the **MIT License**.
