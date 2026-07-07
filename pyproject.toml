@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nv-protocol"
-version = "2.0.2"
+version = "2.0.3"
 description = "Context-Isolated Secret Management for Autonomous AI Software Engineering Agents"
 readme = "README.md"
 requires-python = ">=3.8"
