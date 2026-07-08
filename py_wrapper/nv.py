@@ -15,6 +15,15 @@ Usage:
   nvenv get <KEY>             Retrieve/Decrypt a secret key (debug use).
   nvenv run -- <command>      Run a command with proxy interception.
   nvenv git-helper <action>   Internal Git credential helper proxy.
+  nvenv policy <subcommand>   Manage request policies for secret keys.
+
+Policy Subcommands:
+  nvenv policy list           List all configured policies.
+  nvenv policy set-default <action>
+                              Set default fallback action (allow, warn, deny).
+  nvenv policy add <KEY>      Add or modify a policy for a key.
+                              Options: --hosts, --processes, --methods, --paths, --limit
+  nvenv policy delete <KEY>   Delete policy configuration for a key.
 """)
 
 def main():
@@ -151,6 +160,155 @@ def main():
         from git import run_git_helper
         sys.exit(run_git_helper(sys.argv[2:]))
         
+    elif cmd == "policy":
+        if len(sys.argv) < 3:
+            print("Usage:")
+            print("  nvenv policy list")
+            print("  nvenv policy set-default <allow|warn|deny>")
+            print("  nvenv policy add <KEY> [--hosts H1,H2] [--processes P1,P2] [--methods M1,M2] [--paths T1,T2] [--limit N]")
+            print("  nvenv policy delete <KEY>")
+            sys.exit(1)
+            
+        from policy import PolicyEngine
+        engine = PolicyEngine()
+        subcmd = sys.argv[2]
+        
+        if subcmd == "list":
+            print(f"Default Action: {engine.config.get('default_action', 'warn')}")
+            policies = engine.config.get("policies", {})
+            if not policies:
+                print("No policies configured.")
+            else:
+                print("\nConfigured Policies:")
+                for k, p in policies.items():
+                    print(f"  Secret: {k}")
+                    if p.get("allowed_hosts"):
+                        print(f"    Allowed Hosts: {', '.join(p['allowed_hosts'])}")
+                    if p.get("allowed_processes"):
+                        print(f"    Allowed Processes: {', '.join(p['allowed_processes'])}")
+                    if p.get("allowed_methods"):
+                        print(f"    Allowed Methods: {', '.join(p['allowed_methods'])}")
+                    if p.get("allowed_paths"):
+                        print(f"    Allowed Paths: {', '.join(p['allowed_paths'])}")
+                    if p.get("max_requests_per_minute") is not None:
+                        print(f"    Max Requests/Min: {p['max_requests_per_minute']}")
+                        
+        elif subcmd == "set-default":
+            if len(sys.argv) < 4:
+                print("Usage: nvenv policy set-default <allow|warn|deny>")
+                sys.exit(1)
+            action = sys.argv[3].lower()
+            if action not in ["allow", "warn", "deny"]:
+                print("Error: Default action must be 'allow', 'warn', or 'deny'.")
+                sys.exit(1)
+            engine.config["default_action"] = action
+            if engine.save_config():
+                print(f"Default action set to '{action}' and config saved.")
+            else:
+                sys.exit(1)
+                
+        elif subcmd == "delete":
+            if len(sys.argv) < 4:
+                print("Usage: nvenv policy delete <KEY>")
+                sys.exit(1)
+            key = sys.argv[3]
+            policies = engine.config.get("policies", {})
+            if key in policies:
+                del policies[key]
+                engine.config["policies"] = policies
+                if engine.save_config():
+                    print(f"Policy for secret '{key}' deleted successfully.")
+                else:
+                    sys.exit(1)
+            else:
+                print(f"No policy found for secret '{key}'.")
+                
+        elif subcmd == "add":
+            if len(sys.argv) < 4:
+                print("Usage: nvenv policy add <KEY> [--hosts H1,H2] [--processes P1,P2] [--methods M1,M2] [--paths T1,T2] [--limit N]")
+                sys.exit(1)
+            key = sys.argv[3]
+            
+            # Simple custom CLI parser
+            args_list = sys.argv[4:]
+            hosts = None
+            processes = None
+            methods = None
+            paths = None
+            limit = None
+            
+            i = 0
+            while i < len(args_list):
+                arg = args_list[i]
+                if arg == "--hosts" and i + 1 < len(args_list):
+                    hosts = [h.strip() for h in args_list[i+1].split(",")]
+                    i += 2
+                elif arg == "--processes" and i + 1 < len(args_list):
+                    processes = [p.strip() for p in args_list[i+1].split(",")]
+                    i += 2
+                elif arg == "--methods" and i + 1 < len(args_list):
+                    methods = [m.strip().upper() for m in args_list[i+1].split(",")]
+                    i += 2
+                elif arg == "--paths" and i + 1 < len(args_list):
+                    paths = [p.strip() for p in args_list[i+1].split(",")]
+                    i += 2
+                elif arg == "--limit" and i + 1 < len(args_list):
+                    try:
+                        limit = int(args_list[i+1])
+                    except ValueError:
+                        print("Error: Limit must be an integer.")
+                        sys.exit(1)
+                    i += 2
+                else:
+                    print(f"Error: Unknown option or missing value for '{arg}'")
+                    sys.exit(1)
+            
+            # Interactive prompt if no flags are provided
+            if hosts is None and processes is None and methods is None and paths is None and limit is None:
+                print(f"Interactive Policy Builder for Secret '{key}':")
+                h_in = input("Enter allowed hosts (comma-separated, press enter for all): ").strip()
+                if h_in:
+                    hosts = [h.strip() for h in h_in.split(",")]
+                p_in = input("Enter allowed processes (comma-separated, press enter for all): ").strip()
+                if p_in:
+                    processes = [p.strip() for p in p_in.split(",")]
+                m_in = input("Enter allowed HTTP methods (comma-separated, e.g., POST, GET, press enter for all): ").strip()
+                if m_in:
+                    methods = [m.strip().upper() for m in m_in.split(",")]
+                t_in = input("Enter allowed HTTP paths (comma-separated, e.g., /v1/*, press enter for all): ").strip()
+                if t_in:
+                    paths = [p.strip() for p in t_in.split(",")]
+                l_in = input("Enter max requests per minute (press enter for no limit): ").strip()
+                if l_in:
+                    try:
+                        limit = int(l_in)
+                    except ValueError:
+                        print("Error: Limit must be an integer.")
+                        sys.exit(1)
+            
+            policy = {}
+            if hosts is not None:
+                policy["allowed_hosts"] = hosts
+            if processes is not None:
+                policy["allowed_processes"] = processes
+            if methods is not None:
+                policy["allowed_methods"] = methods
+            if paths is not None:
+                policy["allowed_paths"] = paths
+            if limit is not None:
+                policy["max_requests_per_minute"] = limit
+                
+            policies = engine.config.setdefault("policies", {})
+            policies[key] = policy
+            
+            if engine.save_config():
+                print(f"Policy for secret '{key}' successfully saved.")
+            else:
+                sys.exit(1)
+        else:
+            print(f"Error: Unknown policy subcommand '{subcmd}'.")
+            sys.exit(1)
+            
     else:
         print_usage()
         sys.exit(1)

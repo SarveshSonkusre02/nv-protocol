@@ -6,30 +6,43 @@ import re
 import sys
 import subprocess
 import traceback
-from ctypes import wintypes
-import ctypes
+import time
 
 from ca import CertificateAuthority
 from policy import PolicyEngine
 from audit import AuditLogger
 from vault import Vault, wipe_bytes
 
-# Windows TCP Table Structures
-class MIB_TCPROW_OWNER_PID(ctypes.Structure):
-    _fields_ = [
-        ("dwState", wintypes.DWORD),
-        ("dwLocalAddr", wintypes.DWORD),
-        ("dwLocalPort", wintypes.DWORD),
-        ("dwRemoteAddr", wintypes.DWORD),
-        ("dwRemotePort", wintypes.DWORD),
-        ("dwOwningPid", wintypes.DWORD)
-    ]
+# Conditional Windows Imports & Structures
+if sys.platform == "win32":
+    from ctypes import wintypes
+    import ctypes
 
-class MIB_TCPTABLE_OWNER_PID(ctypes.Structure):
-    _fields_ = [
-        ("dwNumEntries", wintypes.DWORD),
-        ("table", MIB_TCPROW_OWNER_PID * 1)
-    ]
+    class MIB_TCPROW_OWNER_PID(ctypes.Structure):
+        _fields_ = [
+            ("dwState", wintypes.DWORD),
+            ("dwLocalAddr", wintypes.DWORD),
+            ("dwLocalPort", wintypes.DWORD),
+            ("dwRemoteAddr", wintypes.DWORD),
+            ("dwRemotePort", wintypes.DWORD),
+            ("dwOwningPid", wintypes.DWORD)
+        ]
+
+    class MIB_TCPTABLE_OWNER_PID(ctypes.Structure):
+        _fields_ = [
+            ("dwNumEntries", wintypes.DWORD),
+            ("table", MIB_TCPROW_OWNER_PID * 1)
+        ]
+else:
+    MIB_TCPROW_OWNER_PID = None
+    MIB_TCPTABLE_OWNER_PID = None
+
+# Thread-safe caching structures
+_cache_lock = threading.Lock()
+_pid_descendant_cache = {}    # (pid, target_parent_pid) -> (is_descendant, timestamp)
+_pid_process_name_cache = {}  # pid -> (process_name, timestamp)
+_pid_parent_cache = {}        # pid -> (parent_pid, timestamp)
+CACHE_TTL = 10.0              # cache entries expire after 10 seconds
 
 def get_pid_by_local_port_windows(port):
     import socket as py_socket
@@ -95,6 +108,15 @@ def get_pid_by_local_port(port):
 def get_process_name_by_pid(pid):
     if not pid:
         return "unknown"
+    
+    now = time.time()
+    with _cache_lock:
+        if pid in _pid_process_name_cache:
+            name, ts = _pid_process_name_cache[pid]
+            if now - ts < CACHE_TTL:
+                return name
+
+    name = "unknown"
     if sys.platform == "win32":
         try:
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -106,30 +128,48 @@ def get_process_name_by_pid(pid):
                 if kernel32.QueryFullProcessImageNameW(hProcess, 0, buf, ctypes.byref(size)):
                     name = os.path.basename(buf.value)
                     kernel32.CloseHandle(hProcess)
-                    return name
-                kernel32.CloseHandle(hProcess)
+                else:
+                    kernel32.CloseHandle(hProcess)
         except Exception:
             pass
-        try:
-            out = subprocess.check_output(f'tasklist /FI "PID eq {pid}" /NH /FO CSV', shell=True, stderr=subprocess.DEVNULL).decode('utf-8', errors='ignore')
-            parts = out.strip().split(',')
-            if len(parts) > 0:
-                return parts[0].strip('"')
-        except Exception:
-            pass
+        if name == "unknown":
+            try:
+                out = subprocess.check_output(f'tasklist /FI "PID eq {pid}" /NH /FO CSV', shell=True, stderr=subprocess.DEVNULL).decode('utf-8', errors='ignore')
+                parts = out.strip().split(',')
+                if len(parts) > 0:
+                    name = parts[0].strip('"')
+            except Exception:
+                pass
     else:
         try:
             with open(f"/proc/{pid}/comm", "r") as f:
-                return f.read().strip()
+                name = f.read().strip()
         except Exception:
             try:
                 out = subprocess.check_output(["ps", "-p", str(pid), "-o", "comm="], stderr=subprocess.DEVNULL)
-                return out.decode('utf-8').strip()
+                name = out.decode('utf-8').strip()
             except Exception:
                 pass
-    return "unknown"
+                
+    if not name:
+        name = "unknown"
+        
+    with _cache_lock:
+        _pid_process_name_cache[pid] = (name, now)
+    return name
 
 def get_parent_pid(pid):
+    if not pid:
+        return None
+        
+    now = time.time()
+    with _cache_lock:
+        if pid in _pid_parent_cache:
+            parent, ts = _pid_parent_cache[pid]
+            if now - ts < CACHE_TTL:
+                return parent
+
+    parent = None
     if sys.platform == "win32":
         try:
             TH32CS_SNAPPROCESS = 0x00000002
@@ -149,37 +189,39 @@ def get_parent_pid(pid):
             
             kernel32 = ctypes.windll.kernel32
             hSnapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-            if hSnapshot == -1:
-                return None
-            
-            pe = PROCESSENTRY32()
-            pe.dwSize = ctypes.sizeof(PROCESSENTRY32)
-            
-            if kernel32.Process32First(hSnapshot, ctypes.byref(pe)):
-                while True:
-                    if pe.th32ProcessID == pid:
-                        parent = pe.th32ParentProcessID
-                        kernel32.CloseHandle(hSnapshot)
-                        return parent
-                    if not kernel32.Process32Next(hSnapshot, ctypes.byref(pe)):
+            if hSnapshot != -1:
+                pe = PROCESSENTRY32()
+                pe.dwSize = ctypes.sizeof(PROCESSENTRY32)
+                
+                if kernel32.Process32First(hSnapshot, ctypes.byref(pe)):
+                    while True:
+                        if pe.th32ProcessID == pid:
+                            parent = pe.th32ParentProcessID
+                            break
+                        if not kernel32.Process32Next(hSnapshot, ctypes.byref(pe)):
+                            break
+                kernel32.CloseHandle(hSnapshot)
+        except Exception:
+            pass
+        if parent is None:
+            try:
+                out = subprocess.check_output(f'wmic process where "ProcessID={pid}" get ParentProcessID /value', shell=True, stderr=subprocess.DEVNULL).decode('utf-8')
+                for line in out.splitlines():
+                    if "ParentProcessID" in line:
+                        parent = int(line.split("=")[1].strip())
                         break
-            kernel32.CloseHandle(hSnapshot)
-        except Exception:
-            pass
-        try:
-            out = subprocess.check_output(f'wmic process where "ProcessID={pid}" get ParentProcessID /value', shell=True, stderr=subprocess.DEVNULL).decode('utf-8')
-            for line in out.splitlines():
-                if "ParentProcessID" in line:
-                    return int(line.split("=")[1].strip())
-        except Exception:
-            pass
+            except Exception:
+                pass
     else:
         try:
             out = subprocess.check_output(["ps", "-o", "ppid=", "-p", str(pid)], stderr=subprocess.DEVNULL)
-            return int(out.decode('utf-8').strip())
+            parent = int(out.decode('utf-8').strip())
         except Exception:
             pass
-    return None
+            
+    with _cache_lock:
+        _pid_parent_cache[pid] = (parent, now)
+    return parent
 
 def is_descendant_of(pid, target_parent_pid):
     if not pid or not target_parent_pid:
@@ -187,15 +229,28 @@ def is_descendant_of(pid, target_parent_pid):
     if pid == target_parent_pid:
         return True
     
+    cache_key = (pid, target_parent_pid)
+    now = time.time()
+    with _cache_lock:
+        if cache_key in _pid_descendant_cache:
+            is_desc, ts = _pid_descendant_cache[cache_key]
+            if now - ts < CACHE_TTL:
+                return is_desc
+                
     visited = set()
     current = pid
+    is_desc = False
     while current and current not in visited:
         visited.add(current)
         parent = get_parent_pid(current)
         if parent == target_parent_pid:
-            return True
+            is_desc = True
+            break
         current = parent
-    return False
+        
+    with _cache_lock:
+        _pid_descendant_cache[cache_key] = (is_desc, now)
+    return is_desc
 
 
 class NoViewEnvProxy:
@@ -306,14 +361,19 @@ class NoViewEnvProxy:
         """
         Scans for nv://KEY patterns in bytes, validates access via PolicyEngine,
         decrypts keys on-the-fly, replaces them, and securely wipes the memory.
+        Supports both raw and URL-encoded (nv%3A%2F%2F) placeholders.
         """
         chunks = []
         last_pos = 0
         
-        for match in re.finditer(b'nv://([A-Za-z0-9_]+)', data):
+        # Match both raw nv:// and URL-encoded nv%3A%2F%2F (case-insensitive for hex codes)
+        pattern = re.compile(b'(nv://|nv%3[Aa]%2[Ff]%2[Ff])([A-Za-z0-9_/\\-]+)')
+        
+        for match in pattern.finditer(data):
             chunks.append(data[last_pos:match.start()])
             
-            key_bytes = match.group(1)
+            prefix = match.group(1)
+            key_bytes = match.group(2)
             key = key_bytes.decode('utf-8', errors='ignore')
             
             status, reason = self.policy_engine.validate(key, target_host, method, path, client_process_name)
@@ -328,7 +388,14 @@ class NoViewEnvProxy:
             
             secret_bytes = self.vault.get_bytes(key)
             if secret_bytes is not None:
-                chunks.append(secret_bytes)
+                # If the matched placeholder was URL-encoded, URL-encode the replaced secret too
+                if b'%' in prefix:
+                    import urllib.parse
+                    secret_str = secret_bytes.decode('utf-8', errors='ignore')
+                    encoded_secret = urllib.parse.quote(secret_str).encode('utf-8')
+                    chunks.append(encoded_secret)
+                else:
+                    chunks.append(secret_bytes)
             else:
                 chunks.append(match.group(0))
                 
@@ -414,6 +481,10 @@ class NoViewEnvProxy:
         cert_file, key_file = self._get_or_create_cert(host)
         
         client_ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        try:
+            client_ssl_context.set_alpn_protocols(["http/1.1"])
+        except (AttributeError, NotImplementedError):
+            pass
         client_ssl_context.load_cert_chain(certfile=cert_file, keyfile=key_file)
         
         client_ssl = None
@@ -423,6 +494,10 @@ class NoViewEnvProxy:
             
             remote_conn = socket.create_connection((host, port), timeout=10)
             remote_ssl_context = ssl.create_default_context()
+            try:
+                remote_ssl_context.set_alpn_protocols(["http/1.1"])
+            except (AttributeError, NotImplementedError):
+                pass
             remote_ssl = remote_ssl_context.wrap_socket(remote_conn, server_hostname=host)
             
             self._tunnel_traffic(client_ssl, remote_ssl, host, client_pid, client_process_name)
@@ -451,13 +526,52 @@ class NoViewEnvProxy:
                     host = host_val
                 break
                 
-        if not host:
-            return
-            
         words = req_lines[0].split()
         method = words[0].decode('utf-8', errors='ignore') if len(words) > 0 else "UNKNOWN"
         path = words[1].decode('utf-8', errors='ignore') if len(words) > 1 else "UNKNOWN"
+
+        import urllib.parse
+        parsed_url = urllib.parse.urlparse(path)
+        if parsed_url.path == "/nvenv/resolve" or path.startswith("/nvenv/resolve"):
+            query_params = urllib.parse.parse_qs(parsed_url.query)
+            key_list = query_params.get("key", [])
+            if not key_list:
+                resp = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 15\r\nConnection: close\r\n\r\nMissing key param"
+                client_conn.sendall(resp)
+                return
             
+            key = key_list[0]
+            host_param = query_params.get("host", ["unknown"])[0]
+            method_param = query_params.get("method", ["CONNECT"])[0]
+            path_param = query_params.get("path", ["/"])[0]
+            
+            status, reason = self.policy_engine.validate(key, host_param, method_param, path_param, client_process_name)
+            self.audit_logger.log(key, host_param, method_param, path_param, client_pid, client_process_name, status, reason)
+            
+            if status == "deny" or status == "rate_limited":
+                resp_body = f"Access denied: {reason}".encode('utf-8')
+                resp = f"HTTP/1.1 403 Forbidden\r\nContent-Length: {len(resp_body)}\r\nConnection: close\r\n\r\n".encode('utf-8') + resp_body
+                client_conn.sendall(resp)
+                return
+                
+            if status == "warn":
+                print(f"\n\u26a0\ufe0f  [nvenv WARNING] {reason}", file=sys.stderr)
+                print(f"\ud83d\udc49 Recommend defining a policy for '{key}' in ~/.nv/config.json\n", file=sys.stderr)
+                
+            secret_val = self.vault.get(key)
+            if secret_val is None:
+                resp = b"HTTP/1.1 444 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                client_conn.sendall(resp)
+                return
+                
+            resp_body = secret_val.encode('utf-8')
+            resp = f"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {len(resp_body)}\r\nConnection: close\r\n\r\n".encode('utf-8') + resp_body
+            client_conn.sendall(resp)
+            return
+
+        if not host:
+            return
+
         try:
             remote_conn = socket.create_connection((host, port), timeout=10)
             

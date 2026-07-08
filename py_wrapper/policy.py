@@ -33,6 +33,18 @@ class PolicyEngine:
             except Exception:
                 pass
 
+    def save_config(self):
+        import sys
+        try:
+            os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, indent=2)
+            return True
+        except Exception as e:
+            print(f"Error: Failed to save policy config: {e}", file=sys.stderr)
+            return False
+
+
     def check_rate_limit(self, key, max_per_minute):
         if not max_per_minute:
             return True

@@ -1,17 +1,28 @@
 import os
+import sys
 import sqlite3
-import ctypes
-from ctypes import wintypes
+import base64
+import subprocess
+from cryptography.fernet import Fernet
 
-# Windows DPAPI structure definitions
-class DATA_BLOB(ctypes.Structure):
-    _fields_ = [
-        ('cbData', wintypes.DWORD),
-        ('pbData', ctypes.POINTER(ctypes.c_byte))
-    ]
+# Windows DPAPI structures, conditionally defined
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [
+            ('cbData', wintypes.DWORD),
+            ('pbData', ctypes.POINTER(ctypes.c_byte))
+        ]
+else:
+    DATA_BLOB = None
 
 def encrypt_dpapi(data: bytes) -> bytes:
     """Encrypts bytes using Windows DPAPI (CryptProtectData)."""
+    if sys.platform != "win32":
+        raise NotImplementedError("Windows DPAPI is only available on Windows.")
+    
     if not isinstance(data, bytes):
         data = data.encode('utf-8')
     
@@ -48,6 +59,9 @@ def encrypt_dpapi(data: bytes) -> bytes:
 
 def decrypt_dpapi(encrypted_data: bytes) -> bytes:
     """Decrypts bytes using Windows DPAPI (CryptUnprotectData)."""
+    if sys.platform != "win32":
+        raise NotImplementedError("Windows DPAPI is only available on Windows.")
+        
     data_in = DATA_BLOB()
     data_in.cbData = len(encrypted_data)
     data_in.pbData = ctypes.cast(
@@ -80,6 +94,86 @@ def decrypt_dpapi(encrypted_data: bytes) -> bytes:
             ctypes.windll.kernel32.LocalFree(data_out.pbData)
 
 
+_master_key_cache = None
+
+def get_fallback_master_key() -> bytes:
+    """Retrieves or generates the master key for macOS/Linux symmetric encryption."""
+    global _master_key_cache
+    if _master_key_cache is not None:
+        return _master_key_cache
+
+    if sys.platform == "darwin":
+        try:
+            # security find-generic-password -s "nvenv-protocol" -a "nvenv-master-key" -w
+            out = subprocess.check_output(
+                ["security", "find-generic-password", "-s", "nvenv-protocol", "-a", "nvenv-master-key", "-w"],
+                stderr=subprocess.DEVNULL
+            )
+            key = out.strip()
+            # Validate it's a valid Fernet key
+            Fernet(key)
+            _master_key_cache = key
+            return key
+        except Exception:
+            new_key = Fernet.generate_key()
+            try:
+                subprocess.check_call(
+                    ["security", "add-generic-password", "-s", "nvenv-protocol", "-a", "nvenv-master-key", "-w", new_key.decode('utf-8')],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                _master_key_cache = new_key
+                return new_key
+            except Exception:
+                pass
+
+    # Linux (and macOS fallback) file-based key store
+    home_dir = os.path.expanduser("~")
+    key_dir = os.path.join(home_dir, ".nv")
+    os.makedirs(key_dir, exist_ok=True)
+    key_file = os.path.join(key_dir, ".key")
+
+    if os.path.exists(key_file):
+        try:
+            with open(key_file, "rb") as f:
+                key = f.read().strip()
+                Fernet(key)
+                _master_key_cache = key
+                return key
+        except Exception:
+            pass
+
+    new_key = Fernet.generate_key()
+    try:
+        fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'wb') as f:
+            f.write(new_key)
+        _master_key_cache = new_key
+        return new_key
+    except Exception:
+        volatile_key = Fernet.generate_key()
+        _master_key_cache = volatile_key
+        return volatile_key
+
+def encrypt_data(data: bytes) -> bytes:
+    """Encrypts bytes using Windows DPAPI or fallback symmetric cryptography."""
+    if not isinstance(data, bytes):
+        data = data.encode('utf-8')
+    if sys.platform == "win32":
+        return encrypt_dpapi(data)
+    else:
+        key = get_fallback_master_key()
+        return Fernet(key).encrypt(data)
+
+def decrypt_data(encrypted_data: bytes) -> bytes:
+    """Decrypts bytes using Windows DPAPI or fallback symmetric cryptography."""
+    if sys.platform == "win32":
+        return decrypt_dpapi(encrypted_data)
+    else:
+        key = get_fallback_master_key()
+        return Fernet(key).decrypt(encrypted_data)
+
+
 def wipe_bytes(b: bytearray):
     """Zeros out a mutable bytearray buffer in-place."""
     if isinstance(b, bytearray):
@@ -88,7 +182,7 @@ def wipe_bytes(b: bytearray):
 
 
 class Vault:
-    """SQLite-backed encrypted vault utilizing Windows DPAPI."""
+    """SQLite-backed encrypted vault utilizing Windows DPAPI or secure fallback encryption."""
     def __init__(self, db_path=None):
         if db_path is None:
             home_dir = os.path.expanduser("~")
@@ -117,7 +211,7 @@ class Vault:
 
     def set(self, key: str, value: str):
         """Encrypts and stores a secret in the vault."""
-        encrypted_val = encrypt_dpapi(value.encode('utf-8'))
+        encrypted_val = encrypt_data(value.encode('utf-8'))
         conn = sqlite3.connect(self.db_path)
         try:
             cursor = conn.cursor()
@@ -138,7 +232,7 @@ class Vault:
             row = cursor.fetchone()
             if not row:
                 return None
-            decrypted_bytes = decrypt_dpapi(row[0])
+            decrypted_bytes = decrypt_data(row[0])
             return decrypted_bytes.decode('utf-8')
         finally:
             conn.close()
@@ -152,7 +246,7 @@ class Vault:
             row = cursor.fetchone()
             if not row:
                 return None
-            decrypted_bytes = decrypt_dpapi(row[0])
+            decrypted_bytes = decrypt_data(row[0])
             return bytearray(decrypted_bytes)
         finally:
             conn.close()
@@ -179,3 +273,4 @@ class Vault:
             return changes > 0
         finally:
             conn.close()
+

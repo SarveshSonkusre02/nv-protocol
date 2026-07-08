@@ -4,11 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nv-protocol"
-version = "2.0.3"
+version = "2.0.4"
 description = "Context-Isolated Secret Management for Autonomous AI Software Engineering Agents"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
+dependencies = [
+    "cryptography>=3.0.0"
+]
 
 authors = [
     { name = "Open-Source Software Security Initiative" }

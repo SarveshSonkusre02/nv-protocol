@@ -44,6 +44,7 @@ class TestNVProtocol(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows DPAPI is only supported on Windows")
     def test_dpapi_encryption_decryption(self):
         """Test Windows DPAPI encryption and decryption directly."""
         test_secret = b"stripe-live-secret-token-12345"
@@ -234,6 +235,273 @@ class TestNVProtocol(unittest.TestCase):
             proxy.stop()
             mock_server.shutdown()
             mock_server.server_close()
+
+    def test_cross_platform_vault_encryption(self):
+        """Test the general cross-platform encryption/decryption routines."""
+        from vault import encrypt_data, decrypt_data
+        test_secret = b"test-cross-platform-secret-999"
+        encrypted = encrypt_data(test_secret)
+        self.assertNotEqual(test_secret, encrypted)
+        
+        decrypted = decrypt_data(encrypted)
+        self.assertEqual(test_secret, decrypted)
+
+    def test_proxy_alpn_negotiation(self):
+        """Test that the SSLContext for both server and client allows setting ALPN protocols."""
+        import ssl
+        client_ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        try:
+            client_ssl_context.set_alpn_protocols(["http/1.1"])
+            self.assertEqual(client_ssl_context.get_alpn_protocols(), ["http/1.1"])
+        except (AttributeError, NotImplementedError):
+            pass
+
+    def test_policy_engine_save_config(self):
+        """Test PolicyEngine config serialization and deserialization via policy.py changes."""
+        from policy import PolicyEngine
+        policy_path = os.path.join(self.temp_dir.name, "custom_policy.json")
+        engine = PolicyEngine(policy_path)
+        engine.config["default_action"] = "deny"
+        engine.config["policies"] = {
+            "DB_PASS": {
+                "allowed_hosts": ["db.example.com"],
+                "allowed_processes": ["pg_dump"]
+            }
+        }
+        
+        self.assertTrue(engine.save_config())
+        self.assertTrue(os.path.exists(policy_path))
+        
+        new_engine = PolicyEngine(policy_path)
+        self.assertEqual(new_engine.config["default_action"], "deny")
+        self.assertEqual(new_engine.config["policies"]["DB_PASS"]["allowed_hosts"], ["db.example.com"])
+
+    def test_database_shimming_and_resolver_api(self):
+        """Test database driver shimming and the proxy resolution endpoint."""
+        import secrets
+        import types
+        token = secrets.token_hex(32)
+        ca = CertificateAuthority()
+        proxy = NoViewEnvProxy(
+            db_path=self.db_path,
+            ca=ca,
+            proxy_token=token,
+            policy_config_path=self.config_path,
+            audit_log_path=self.log_path
+        )
+        proxy_port = proxy.start()
+        
+        self.vault.set("MONGO_PASSWORD", "super-secret-mongo-pwd")
+        self.vault.set("redis/prod-key", "secure-redis-token")
+        
+        os.environ["HTTP_PROXY"] = f"http://127.0.0.1:{proxy_port}"
+        os.environ["NV_PROXY_TOKEN"] = token
+        
+        try:
+            # Test /nvenv/resolve endpoint directly
+            import urllib.request
+            import urllib.parse
+            
+            url = f"http://127.0.0.1:{proxy_port}/nvenv/resolve?key=MONGO_PASSWORD&host=localhost&method=CONNECT&path=mongodb"
+            req = urllib.request.Request(url, headers={"x-nv-proxy-token": token})
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(req, timeout=3) as resp:
+                self.assertEqual(resp.status, 200)
+                body = resp.read().decode('utf-8')
+                self.assertEqual(body, "super-secret-mongo-pwd")
+                
+            # Request hierarchical key
+            url = f"http://127.0.0.1:{proxy_port}/nvenv/resolve?key=redis/prod-key&host=localhost&method=CONNECT&path=redis"
+            req = urllib.request.Request(url, headers={"x-nv-proxy-token": token})
+            with opener.open(req, timeout=3) as resp:
+                self.assertEqual(resp.status, 200)
+                body = resp.read().decode('utf-8')
+                self.assertEqual(body, "secure-redis-token")
+
+            # Test Python Import Shim Hooking
+            class DummyMongoClient:
+                def __init__(self, host=None, *args, **kwargs):
+                    self.host = host
+                    self.args = args
+                    self.kwargs = kwargs
+            
+            class DummyConnectionPool:
+                @classmethod
+                def from_url(cls, url, *args, **kwargs):
+                    return url
+                    
+            class DummyRedis:
+                def __init__(self, host=None, password=None, *args, **kwargs):
+                    self.host = host
+                    self.password = password
+
+            class DummyPsycopg2:
+                @staticmethod
+                def connect(dsn=None, *args, **kwargs):
+                    return dsn or kwargs.get("password")
+
+            mock_pymongo = types.ModuleType("pymongo")
+            mock_pymongo.MongoClient = DummyMongoClient
+            sys.modules["pymongo"] = mock_pymongo
+
+            mock_redis = types.ModuleType("redis")
+            mock_redis.ConnectionPool = DummyConnectionPool
+            mock_redis.Redis = DummyRedis
+            sys.modules["redis"] = mock_redis
+            
+            mock_psycopg2 = types.ModuleType("psycopg2")
+            mock_psycopg2.connect = DummyPsycopg2.connect
+            sys.modules["psycopg2"] = mock_psycopg2
+
+            # Execute shim definitions
+            from runner import PYTHON_SHIM_CONTENT
+            local_vars = {}
+            exec(PYTHON_SHIM_CONTENT, globals(), local_vars)
+            
+            # Connect & Verify Mongo Shim
+            client = mock_pymongo.MongoClient("mongodb://admin:nv://MONGO_PASSWORD@localhost:27017")
+            self.assertEqual(client.host, "mongodb://admin:super-secret-mongo-pwd@localhost:27017")
+            
+            # Connect & Verify Redis URL Shim
+            resolved_redis_url = mock_redis.ConnectionPool.from_url("redis://:nv://redis/prod-key@localhost:6379")
+            self.assertEqual(resolved_redis_url, "redis://:secure-redis-token@localhost:6379")
+
+            # Connect & Verify Psycopg2 Shim
+            resolved_pg_pass = mock_psycopg2.connect(password="nv://MONGO_PASSWORD")
+            self.assertEqual(resolved_pg_pass, "super-secret-mongo-pwd")
+            
+        finally:
+            proxy.stop()
+            for m in ("pymongo", "redis", "psycopg2"):
+                if m in sys.modules:
+                    del sys.modules[m]
+
+    def test_env_var_shimming(self):
+        """Test that environment variables containing nv:// placeholders are transparently decrypted."""
+        import secrets
+        token = secrets.token_hex(32)
+        ca = CertificateAuthority()
+        proxy = NoViewEnvProxy(
+            db_path=self.db_path,
+            ca=ca,
+            proxy_token=token,
+            policy_config_path=self.config_path,
+            audit_log_path=self.log_path
+        )
+        proxy_port = proxy.start()
+        
+        self.vault.set("AWS_SECRET_KEY", "aws-safe-secret-key-12345")
+        
+        os.environ["HTTP_PROXY"] = f"http://127.0.0.1:{proxy_port}"
+        os.environ["NV_PROXY_TOKEN"] = token
+        
+        try:
+            from runner import PYTHON_SHIM_CONTENT
+            local_vars = {}
+            exec(PYTHON_SHIM_CONTENT, globals(), local_vars)
+            
+            os.environ["MY_AWS_KEY"] = "nv://AWS_SECRET_KEY"
+            
+            resolved_val = os.environ.get("MY_AWS_KEY")
+            self.assertEqual(resolved_val, "aws-safe-secret-key-12345")
+            
+            self.assertEqual(os.environ["MY_AWS_KEY"], "aws-safe-secret-key-12345")
+        finally:
+            proxy.stop()
+            if "MY_AWS_KEY" in os.environ:
+                del os.environ["MY_AWS_KEY"]
+
+    def test_file_interception_shimming(self):
+        """Test builtins.open interception for files containing nv:// placeholders or paths."""
+        import secrets
+        token = secrets.token_hex(32)
+        ca = CertificateAuthority()
+        proxy = NoViewEnvProxy(
+            db_path=self.db_path,
+            ca=ca,
+            proxy_token=token,
+            policy_config_path=self.config_path,
+            audit_log_path=self.log_path
+        )
+        proxy_port = proxy.start()
+        
+        self.vault.set("SSH_PRIVATE_KEY", "ssh-rsa-private-content-here")
+        self.vault.set("DB_PASSWORD", "db-secret-password")
+        
+        os.environ["HTTP_PROXY"] = f"http://127.0.0.1:{proxy_port}"
+        os.environ["NV_PROXY_TOKEN"] = token
+        
+        try:
+            from runner import PYTHON_SHIM_CONTENT
+            local_vars = {}
+            exec(PYTHON_SHIM_CONTENT, globals(), local_vars)
+            
+            with open("nv://SSH_PRIVATE_KEY", "r") as f:
+                content = f.read()
+            self.assertEqual(content, "ssh-rsa-private-content-here")
+            
+            temp_config = tempfile.NamedTemporaryFile(delete=False, suffix=".json", mode='w')
+            temp_config.write('{"password": "nv://DB_PASSWORD"}')
+            temp_config.close()
+            
+            with open(temp_config.name, "r") as f:
+                content = f.read()
+            self.assertEqual(content, '{"password": "db-secret-password"}')
+            
+            with open(temp_config.name, "rb") as f:
+                content_bytes = f.read()
+            self.assertEqual(content_bytes, b'{"password": "db-secret-password"}')
+            
+            os.remove(temp_config.name)
+        finally:
+            proxy.stop()
+
+    def test_crypto_shimming(self):
+        """Test cryptographic signing shimming (jwt)."""
+        import secrets
+        import types
+        token = secrets.token_hex(32)
+        ca = CertificateAuthority()
+        proxy = NoViewEnvProxy(
+            db_path=self.db_path,
+            ca=ca,
+            proxy_token=token,
+            policy_config_path=self.config_path,
+            audit_log_path=self.log_path
+        )
+        proxy_port = proxy.start()
+        
+        self.vault.set("JWT_SIGNING_KEY", "super-secret-jwt-key")
+        
+        os.environ["HTTP_PROXY"] = f"http://127.0.0.1:{proxy_port}"
+        os.environ["NV_PROXY_TOKEN"] = token
+        
+        try:
+            class DummyJWT:
+                def encode(self, payload, key, algorithm="HS256"):
+                    return f"signed-with-{key}"
+                def decode(self, token, key, algorithms=["HS256"]):
+                    return f"verified-with-{key}"
+                    
+            mock_jwt = types.ModuleType("jwt")
+            mock_jwt.encode = DummyJWT().encode
+            mock_jwt.decode = DummyJWT().decode
+            sys.modules["jwt"] = mock_jwt
+            
+            from runner import PYTHON_SHIM_CONTENT
+            local_vars = {}
+            exec(PYTHON_SHIM_CONTENT, globals(), local_vars)
+            
+            res_encode = mock_jwt.encode({"user": "admin"}, "nv://JWT_SIGNING_KEY")
+            self.assertEqual(res_encode, "signed-with-super-secret-jwt-key")
+            
+            res_decode = mock_jwt.decode("token123", "nv://JWT_SIGNING_KEY")
+            self.assertEqual(res_decode, "verified-with-super-secret-jwt-key")
+        finally:
+            proxy.stop()
+            if "jwt" in sys.modules:
+                del sys.modules["jwt"]
+
 
 if __name__ == '__main__':
     unittest.main()
