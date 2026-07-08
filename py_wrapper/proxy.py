@@ -10,7 +10,7 @@ import time
 
 from py_wrapper.ca import CertificateAuthority
 from py_wrapper.policy import PolicyEngine
-from py_wrapper.audit import AuditLogger
+from py_wrapper.nv_audit import AuditLogger
 from py_wrapper.vault import Vault, wipe_bytes
 
 # Conditional Windows Imports & Structures

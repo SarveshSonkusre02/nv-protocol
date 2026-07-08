@@ -13,12 +13,12 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "py_wrapper"))
 
-from vault import Vault, encrypt_dpapi, decrypt_dpapi, wipe_bytes
-from ca import CertificateAuthority
-from proxy import NoViewEnvProxy, get_pid_by_local_port, get_process_name_by_pid, is_descendant_of
-from policy import PolicyEngine
-from audit import AuditLogger
-import runner
+from py_wrapper.vault import Vault, encrypt_dpapi, decrypt_dpapi, wipe_bytes
+from py_wrapper.ca import CertificateAuthority
+from py_wrapper.proxy import NoViewEnvProxy, get_pid_by_local_port, get_process_name_by_pid, is_descendant_of
+from py_wrapper.policy import PolicyEngine
+from py_wrapper.nv_audit import AuditLogger
+from py_wrapper import runner
 
 class MockHTTPHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -238,7 +238,7 @@ class TestNVProtocol(unittest.TestCase):
 
     def test_cross_platform_vault_encryption(self):
         """Test the general cross-platform encryption/decryption routines."""
-        from vault import encrypt_data, decrypt_data
+        from py_wrapper.vault import encrypt_data, decrypt_data
         test_secret = b"test-cross-platform-secret-999"
         encrypted = encrypt_data(test_secret)
         self.assertNotEqual(test_secret, encrypted)
@@ -258,7 +258,7 @@ class TestNVProtocol(unittest.TestCase):
 
     def test_policy_engine_save_config(self):
         """Test PolicyEngine config serialization and deserialization via policy.py changes."""
-        from policy import PolicyEngine
+        from py_wrapper.policy import PolicyEngine
         policy_path = os.path.join(self.temp_dir.name, "custom_policy.json")
         engine = PolicyEngine(policy_path)
         engine.config["default_action"] = "deny"
@@ -354,7 +354,7 @@ class TestNVProtocol(unittest.TestCase):
             sys.modules["psycopg2"] = mock_psycopg2
 
             # Execute shim definitions
-            from runner import PYTHON_SHIM_CONTENT
+            from py_wrapper.runner import PYTHON_SHIM_CONTENT
             local_vars = {}
             exec(PYTHON_SHIM_CONTENT, globals(), local_vars)
             
@@ -396,7 +396,7 @@ class TestNVProtocol(unittest.TestCase):
         os.environ["NV_PROXY_TOKEN"] = token
         
         try:
-            from runner import PYTHON_SHIM_CONTENT
+            from py_wrapper.runner import PYTHON_SHIM_CONTENT
             local_vars = {}
             exec(PYTHON_SHIM_CONTENT, globals(), local_vars)
             
@@ -432,7 +432,7 @@ class TestNVProtocol(unittest.TestCase):
         os.environ["NV_PROXY_TOKEN"] = token
         
         try:
-            from runner import PYTHON_SHIM_CONTENT
+            from py_wrapper.runner import PYTHON_SHIM_CONTENT
             local_vars = {}
             exec(PYTHON_SHIM_CONTENT, globals(), local_vars)
             
@@ -488,7 +488,7 @@ class TestNVProtocol(unittest.TestCase):
             mock_jwt.decode = DummyJWT().decode
             sys.modules["jwt"] = mock_jwt
             
-            from runner import PYTHON_SHIM_CONTENT
+            from py_wrapper.runner import PYTHON_SHIM_CONTENT
             local_vars = {}
             exec(PYTHON_SHIM_CONTENT, globals(), local_vars)
             
