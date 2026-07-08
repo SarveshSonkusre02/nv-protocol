@@ -8,10 +8,10 @@ import subprocess
 import traceback
 import time
 
-from ca import CertificateAuthority
-from policy import PolicyEngine
-from audit import AuditLogger
-from vault import Vault, wipe_bytes
+from py_wrapper.ca import CertificateAuthority
+from py_wrapper.policy import PolicyEngine
+from py_wrapper.audit import AuditLogger
+from py_wrapper.vault import Vault, wipe_bytes
 
 # Conditional Windows Imports & Structures
 if sys.platform == "win32":

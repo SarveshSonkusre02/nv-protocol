@@ -4,9 +4,9 @@ import subprocess
 import tempfile
 import secrets
 import shutil
-from vault import Vault
-from ca import CertificateAuthority
-from proxy import NoViewEnvProxy
+from py_wrapper.vault import Vault
+from py_wrapper.ca import CertificateAuthority
+from py_wrapper.proxy import NoViewEnvProxy
 
 PYTHON_SHIM_CONTENT = r"""import os
 import sys
