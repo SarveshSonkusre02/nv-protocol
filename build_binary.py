@@ -11,6 +11,19 @@ def main():
     target_dir = os.path.join("bin", platform)
     os.makedirs(target_dir, exist_ok=True)
     
+    # Clean up root-level packaging stubs if they conflict with py_wrapper imports
+    conflicting_stubs = ["ca.py", "git.py", "policy.py", "proxy.py", "runner.py", "vault.py"]
+    for stub in conflicting_stubs:
+        if os.path.exists(stub):
+            try:
+                with open(stub, 'r') as f:
+                    content = f.read()
+                if "Relocated to py_wrapper" in content:
+                    os.remove(stub)
+                    print(f"Removed conflicting root-level stub: {stub}")
+            except Exception as e:
+                print(f"Warning: Could not check/remove stub {stub}: {e}")
+    
     # 2. Assert/Install PyInstaller dependencies
     try:
         import PyInstaller.__main__

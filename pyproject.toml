@@ -51,3 +51,6 @@ include-package-data = true
 py_wrapper = [
     "bin_redirect.js"
 ]
+
+[tool.pyrefly]
+search_path = ["py_wrapper"]
