@@ -7,6 +7,7 @@ import sys
 import subprocess
 import traceback
 import time
+from typing import List, Union
 
 from py_wrapper.ca import CertificateAuthority
 from py_wrapper.policy import PolicyEngine
@@ -255,7 +256,7 @@ def is_descendant_of(pid, target_parent_pid):
 
 class NoViewEnvProxy:
     """MITM TLS Interception Proxy Server."""
-    def __init__(self, db_path: str, ca: CertificateAuthority, allowed_pid: int = None, proxy_token: str = None, policy_config_path=None, audit_log_path=None):
+    def __init__(self, db_path: str | None, ca: CertificateAuthority, allowed_pid: int | None = None, proxy_token: str | None = None, policy_config_path=None, audit_log_path=None):
         self.db_path = db_path
         self.vault = Vault(db_path)
         self.ca = ca
@@ -296,6 +297,7 @@ class NoViewEnvProxy:
                 self.server_socket.close()
             except:
                 pass
+            self.server_socket = None
         
         # Clean up temporary certificate files
         if os.path.exists(self.cert_dir):
@@ -306,12 +308,38 @@ class NoViewEnvProxy:
                     pass
 
     def _accept_loop(self):
+        """Accept incoming client connections until the proxy stops."""
+
         while self.running:
             try:
-                client_conn, addr = self.server_socket.accept()
-                t = threading.Thread(target=self._handle_client, args=(client_conn,), daemon=True)
-                t.start()
-            except Exception:
+                sock = self.server_socket
+                if sock is None:
+                    break
+                client_conn, _ = sock.accept()
+
+                threading.Thread(
+                    target=self._handle_client,
+                    args=(client_conn,),
+                    daemon=True,
+                    name="nvenv-client",
+                ).start()
+
+            except OSError:
+                # Expected when the listening socket is closed during shutdown.
+                if not self.running:
+                    break
+
+                print(
+                    "[nvenv] Failed to accept incoming connection.",
+                    file=sys.stderr,
+                )
+
+            except Exception as exc:
+                print(
+                    f"[nvenv] Unexpected error in accept loop: {exc}",
+                    file=sys.stderr,
+                )
+
                 if not self.running:
                     break
 
@@ -357,59 +385,135 @@ class NoViewEnvProxy:
         except Exception:
             pass
 
-    def _replace_placeholders_lazy(self, data: bytes, target_host: str, method: str, path: str, client_pid: int, client_process_name: str) -> bytes:
+    def _replace_placeholders_lazy(
+        self,
+        data: bytes,
+        target_host: str,
+        method: str,
+        path: str,
+        client_pid: int,
+        client_process_name: str,
+    ) -> bytes:
         """
-        Scans for nv://KEY patterns in bytes, validates access via PolicyEngine,
-        decrypts keys on-the-fly, replaces them, and securely wipes the memory.
-        Supports both raw and URL-encoded (nv%3A%2F%2F) placeholders.
+        Replace nv://KEY (and URL-encoded equivalents) with runtime secrets.
+
+        Every secret resolution is:
+        1. Policy validated
+        2. Audited
+        3. Decrypted only when required
+        4. Inserted into the outgoing payload
+
+        The same secret is resolved only once per request.
         """
-        chunks = []
+
+        import urllib.parse
+
+        pattern = re.compile(
+            rb"(nv://|nv%3[Aa]%2[Ff]%2[Ff])([A-Za-z0-9_\-./]+)"
+        )
+
+        chunks: List[Union[bytes, bytearray]] = []
         last_pos = 0
-        
-        # Match both raw nv:// and URL-encoded nv%3A%2F%2F (case-insensitive for hex codes)
-        pattern = re.compile(b'(nv://|nv%3[Aa]%2[Ff]%2[Ff])([A-Za-z0-9_/\\-]+)')
-        
+
+        resolved_cache = {}
+        warned_keys = set()
+
         for match in pattern.finditer(data):
-            chunks.append(data[last_pos:match.start()])
-            
-            prefix = match.group(1)
-            key_bytes = match.group(2)
-            key = key_bytes.decode('utf-8', errors='ignore')
-            
-            status, reason = self.policy_engine.validate(key, target_host, method, path, client_process_name)
-            self.audit_logger.log(key, target_host, method, path, client_pid, client_process_name, status, reason)
-            
-            if status == "deny" or status == "rate_limited":
-                raise PermissionError(f"Access to secret '{key}' blocked by policy: {reason}")
-            
-            if status == "warn":
-                print(f"\n⚠️  [nvenv WARNING] {reason}", file=sys.stderr)
-                print(f"👉 Recommend defining a policy for '{key}' in ~/.nv/config.json\n", file=sys.stderr)
-            
-            secret_bytes = self.vault.get_bytes(key)
-            if secret_bytes is not None:
-                # If the matched placeholder was URL-encoded, URL-encode the replaced secret too
-                if b'%' in prefix:
-                    import urllib.parse
-                    secret_str = secret_bytes.decode('utf-8', errors='ignore')
-                    encoded_secret = urllib.parse.quote(secret_str).encode('utf-8')
-                    chunks.append(encoded_secret)
+
+            chunks.append(data[last_pos : match.start()])
+
+            encoded = b"%" in match.group(1)
+
+            key = match.group(2).decode(
+                "utf-8",
+                errors="ignore",
+            )
+
+            # ----------------------------------------------------------
+            # Cache repeated resolutions within the same request
+            # ----------------------------------------------------------
+            if key not in resolved_cache:
+
+                status, reason = self.policy_engine.validate(
+                    key,
+                    target_host,
+                    method,
+                    path,
+                    client_process_name,
+                )
+
+                self.audit_logger.log(
+                    key,
+                    target_host,
+                    method,
+                    path,
+                    client_pid,
+                    client_process_name,
+                    status,
+                    reason,
+                )
+
+                if status in ("deny", "rate_limited"):
+                    raise PermissionError(
+                        f"Access to secret '{key}' blocked: {reason}"
+                    )
+
+                if status == "warn" and key not in warned_keys:
+
+                    warned_keys.add(key)
+
+                    print(
+                        f"\n⚠️  [nvenv WARNING] {reason}",
+                        file=sys.stderr,
+                    )
+
+                    print(
+                        f"👉 Recommend defining a policy for '{key}' "
+                        f"in ~/.nv/config.json\n",
+                        file=sys.stderr,
+                    )
+
+                resolved_cache[key] = self.vault.get_bytes(key)
+
+            secret = resolved_cache[key]
+
+            # ----------------------------------------------------------
+            # Secret exists
+            # ----------------------------------------------------------
+            if secret is not None:
+
+                if encoded:
+
+                    chunks.append(
+                        urllib.parse.quote_from_bytes(secret).encode()
+                    )
+
                 else:
-                    chunks.append(secret_bytes)
+
+                    chunks.append(secret)
+
             else:
+
+                # Leave unresolved placeholder unchanged.
                 chunks.append(match.group(0))
-                
+
             last_pos = match.end()
-            
+
         chunks.append(data[last_pos:])
-        
-        modified_data = b"".join(chunks)
-        
-        for chunk in chunks:
-            if isinstance(chunk, bytearray):
-                wipe_bytes(chunk)
-                
-        return modified_data
+
+        modified = b"".join(chunks)
+
+        # --------------------------------------------------------------
+        # Securely wipe mutable copies if the vault returns bytearrays
+        # --------------------------------------------------------------
+        for value in resolved_cache.values():
+
+            if isinstance(value, bytearray):
+                wipe_bytes(value)
+
+        resolved_cache.clear()
+
+        return modified
 
     def _handle_client(self, client_conn):
         try:
@@ -511,93 +615,218 @@ class NoViewEnvProxy:
                     except:
                         pass
 
-    def _handle_http(self, client_conn, url, headers_chunk, body_chunk, client_pid, client_process_name):
+    def _handle_http(
+        self,
+        client_conn,
+        url,
+        headers_chunk,
+        body_chunk,
+        client_pid,
+        client_process_name,
+    ):
+        import urllib.parse
+
+        remote_conn = None
         host = None
         port = 80
-        
-        req_lines = headers_chunk.split(b"\r\n")
-        for line in req_lines[1:]:
-            if line.lower().startswith(b"host:"):
-                host_val = line.split(b":", 1)[1].strip().decode('utf-8', errors='ignore')
-                if ":" in host_val:
-                    host, port_str = host_val.split(":", 1)
-                    port = int(port_str)
-                else:
-                    host = host_val
-                break
-                
-        words = req_lines[0].split()
-        method = words[0].decode('utf-8', errors='ignore') if len(words) > 0 else "UNKNOWN"
-        path = words[1].decode('utf-8', errors='ignore') if len(words) > 1 else "UNKNOWN"
 
-        import urllib.parse
+        req_lines = headers_chunk.split(b"\r\n")
+
+        # ------------------------------------------------------------------
+        # Parse request line
+        # ------------------------------------------------------------------
+        request_line = req_lines[0].split()
+
+        method = (
+            request_line[0].decode("utf-8", errors="ignore")
+            if len(request_line) > 0
+            else "UNKNOWN"
+        )
+
+        path = (
+            request_line[1].decode("utf-8", errors="ignore")
+            if len(request_line) > 1
+            else "/"
+        )
+
+        # ------------------------------------------------------------------
+        # Parse Host header
+        # ------------------------------------------------------------------
+        for line in req_lines[1:]:
+            if not line.lower().startswith(b"host:"):
+                continue
+
+            host_value = (
+                line.split(b":", 1)[1]
+                .strip()
+                .decode("utf-8", errors="ignore")
+            )
+
+            if ":" in host_value:
+                host, port_str = host_value.rsplit(":", 1)
+
+                try:
+                    port = int(port_str)
+                except ValueError:
+                    port = 80
+            else:
+                host = host_value
+
+            break
+
+        # ------------------------------------------------------------------
+        # Internal nvenv API
+        # ------------------------------------------------------------------
         parsed_url = urllib.parse.urlparse(path)
-        if parsed_url.path == "/nvenv/resolve" or path.startswith("/nvenv/resolve"):
-            query_params = urllib.parse.parse_qs(parsed_url.query)
-            key_list = query_params.get("key", [])
-            if not key_list:
-                resp = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 15\r\nConnection: close\r\n\r\nMissing key param"
-                client_conn.sendall(resp)
+
+        if parsed_url.path == "/nvenv/resolve":
+
+            params = urllib.parse.parse_qs(parsed_url.query)
+
+            key = params.get("key", [None])[0]
+
+            if key is None:
+                body = b"Missing required parameter: key"
+
+                response = (
+                    b"HTTP/1.1 400 Bad Request\r\n"
+                    + f"Content-Length: {len(body)}\r\n".encode()
+                    + b"Connection: close\r\n\r\n"
+                    + body
+                )
+
+                client_conn.sendall(response)
                 return
-            
-            key = key_list[0]
-            host_param = query_params.get("host", ["unknown"])[0]
-            method_param = query_params.get("method", ["CONNECT"])[0]
-            path_param = query_params.get("path", ["/"])[0]
-            
-            status, reason = self.policy_engine.validate(key, host_param, method_param, path_param, client_process_name)
-            self.audit_logger.log(key, host_param, method_param, path_param, client_pid, client_process_name, status, reason)
-            
-            if status == "deny" or status == "rate_limited":
-                resp_body = f"Access denied: {reason}".encode('utf-8')
-                resp = f"HTTP/1.1 403 Forbidden\r\nContent-Length: {len(resp_body)}\r\nConnection: close\r\n\r\n".encode('utf-8') + resp_body
-                client_conn.sendall(resp)
+
+            host_param = params.get("host", ["unknown"])[0]
+            method_param = params.get("method", ["CONNECT"])[0]
+            path_param = params.get("path", ["/"])[0]
+
+            status, reason = self.policy_engine.validate(
+                key,
+                host_param,
+                method_param,
+                path_param,
+                client_process_name,
+            )
+
+            self.audit_logger.log(
+                key,
+                host_param,
+                method_param,
+                path_param,
+                client_pid,
+                client_process_name,
+                status,
+                reason,
+            )
+
+            if status in ("deny", "rate_limited"):
+
+                body = f"Access denied: {reason}".encode()
+
+                response = (
+                    b"HTTP/1.1 403 Forbidden\r\n"
+                    + f"Content-Length: {len(body)}\r\n".encode()
+                    + b"Connection: close\r\n\r\n"
+                    + body
+                )
+
+                client_conn.sendall(response)
                 return
-                
+
             if status == "warn":
-                print(f"\n\u26a0\ufe0f  [nvenv WARNING] {reason}", file=sys.stderr)
-                print(f"\ud83d\udc49 Recommend defining a policy for '{key}' in ~/.nv/config.json\n", file=sys.stderr)
-                
-            secret_val = self.vault.get(key)
-            if secret_val is None:
-                resp = b"HTTP/1.1 444 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                client_conn.sendall(resp)
+                print(
+                    f"\n⚠️  [nvenv WARNING] {reason}",
+                    file=sys.stderr,
+                )
+                print(
+                    f"👉 Recommend defining a policy for '{key}' in ~/.nv/config.json\n",
+                    file=sys.stderr,
+                )
+
+            secret = self.vault.get(key)
+
+            if secret is None:
+                client_conn.sendall(
+                    b"HTTP/1.1 404 Not Found\r\n"
+                    b"Content-Length: 0\r\n"
+                    b"Connection: close\r\n\r\n"
+                )
                 return
-                
-            resp_body = secret_val.encode('utf-8')
-            resp = f"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {len(resp_body)}\r\nConnection: close\r\n\r\n".encode('utf-8') + resp_body
-            client_conn.sendall(resp)
+
+            body = secret.encode()
+
+            response = (
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/plain\r\n"
+                + f"Content-Length: {len(body)}\r\n".encode()
+                + b"Connection: close\r\n\r\n"
+                + body
+            )
+
+            client_conn.sendall(response)
             return
 
-        if not host:
+        # ------------------------------------------------------------------
+        # Forward regular HTTP request
+        # ------------------------------------------------------------------
+        if host is None:
+
+            client_conn.sendall(
+                b"HTTP/1.1 400 Bad Request\r\n"
+                b"Content-Length: 0\r\n"
+                b"Connection: close\r\n\r\n"
+            )
             return
 
         try:
-            remote_conn = socket.create_connection((host, port), timeout=10)
-            
-            full_request = headers_chunk + b"\r\n\r\n" + body_chunk
-            try:
-                modified_request = self._replace_placeholders_lazy(
-                    full_request, host, method, path, client_pid, client_process_name
-                )
-            except PermissionError as e:
-                self._send_error_response(client_conn, str(e))
-                return
-            
-            remote_conn.sendall(modified_request)
-            
+
+            remote_conn = socket.create_connection(
+                (host, port),
+                timeout=10,
+            )
+
+            request = headers_chunk + b"\r\n\r\n" + body_chunk
+
+            request = self._replace_placeholders_lazy(
+                request,
+                host,
+                method,
+                path,
+                client_pid,
+                client_process_name,
+            )
+
+            remote_conn.sendall(request)
+
             while True:
+
                 chunk = remote_conn.recv(4096)
+
                 if not chunk:
                     break
+
                 client_conn.sendall(chunk)
-        except Exception:
-            pass
+
+        except PermissionError as exc:
+
+            self._send_error_response(client_conn, str(exc))
+
+        except Exception as exc:
+
+            print(
+                f"[nvenv] HTTP proxy error: {exc}",
+                file=sys.stderr,
+            )
+
         finally:
-            try:
-                remote_conn.close()
-            except:
-                pass
+
+            if remote_conn is not None:
+                try:
+                    remote_conn.close()
+                except OSError:
+                    pass
 
     def _tunnel_traffic(self, client_ssl, remote_ssl, target_host, client_pid, client_process_name):
         client_ssl.settimeout(15.0)

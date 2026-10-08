@@ -502,6 +502,55 @@ class TestNVProtocol(unittest.TestCase):
             if "jwt" in sys.modules:
                 del sys.modules["jwt"]
 
+    def test_env_import(self):
+        """Test nvenv import .env migration functionality."""
+        from py_wrapper.nv import import_env_file
+        
+        env_file_path = os.path.join(self.temp_dir.name, ".env")
+        with open(env_file_path, "w", encoding="utf-8") as f:
+            f.write("# Sample config\n")
+            f.write("STRIPE_KEY=sk_test_123456789\n")
+            f.write("ALREADY_SET=nv://ALREADY_SET\n")
+            f.write("DATABASE_URL=\"postgres://user:pass@localhost:5432/db\"\n")
+
+        # Set DB path override for vault during test if needed
+        import_env_file(env_file_path)
+
+        with open(env_file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        self.assertIn("STRIPE_KEY=nv://STRIPE_KEY", content)
+        self.assertIn("DATABASE_URL=nv://DATABASE_URL", content)
+        self.assertIn("ALREADY_SET=nv://ALREADY_SET", content)
+
+        # Check that secrets were stored in vault
+        self.assertEqual(self.vault.get("STRIPE_KEY"), "sk_test_123456789")
+        self.assertEqual(self.vault.get("DATABASE_URL"), "postgres://user:pass@localhost:5432/db")
+
+    def test_mcp_server(self):
+        """Test MCP server protocol handling."""
+        from py_wrapper.mcp_server import run_mcp_server
+        import io
+        
+        self.vault.set("MCP_SECRET_KEY", "mcp-secret-value")
+        
+        req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "nvenv_list_keys", "arguments": {}}})
+        
+        old_stdin = sys.stdin
+        old_stdout = sys.stdout
+        try:
+            sys.stdin = io.StringIO(req + "\n")
+            sys.stdout = io.StringIO()
+            run_mcp_server()
+            output = sys.stdout.getvalue().strip()
+            resp = json.loads(output)
+            self.assertEqual(resp["id"], 1)
+            self.assertIn("MCP_SECRET_KEY", resp["result"]["content"][0]["text"])
+        finally:
+            sys.stdin = old_stdin
+            sys.stdout = old_stdout
+
 
 if __name__ == '__main__':
     unittest.main()
+

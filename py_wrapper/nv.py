@@ -1,7 +1,12 @@
+import os
+import json
 import sys
 import getpass
 from vault import Vault
 from runner import run_command
+from typing import TypeAlias
+
+PolicyValue: TypeAlias = list[str] | int
 
 def print_usage():
     print("""
@@ -10,10 +15,13 @@ nvenv (No-View Env) - Context-Isolated Secret Management CLI
 Usage:
   nvenv init                  Initialize the secure vault database.
   nvenv set <KEY>             Encrypt and store a secret key.
+  nvenv import [FILE]         Migrate plaintext .env keys to nvenv:// vault.
   nvenv delete <KEY>          Delete a secret key from the vault.
   nvenv list                  List stored keys (hiding values).
   nvenv get <KEY>             Retrieve/Decrypt a secret key (debug use).
   nvenv run -- <command>      Run a command with proxy interception.
+  nvenv audit [--limit N]     View secure proxy execution audit logs.
+  nvenv mcp                   Run Model Context Protocol (MCP) server.
   nvenv git-helper <action>   Internal Git credential helper proxy.
   nvenv policy <subcommand>   Manage request policies for secret keys.
 
@@ -25,6 +33,52 @@ Policy Subcommands:
                               Options: --hosts, --processes, --methods, --paths, --limit
   nvenv policy delete <KEY>   Delete policy configuration for a key.
 """)
+
+def import_env_file(file_path=".env"):
+    if not os.path.exists(file_path):
+        print(f"Error: Target env file '{file_path}' does not exist.", file=sys.stderr)
+        sys.exit(1)
+        
+    vault = Vault()
+    migrated_count = 0
+    new_lines = []
+    
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+        
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            new_lines.append(line)
+            continue
+            
+        parts = line.split("=", 1)
+        key = parts[0].strip()
+        val = parts[1].strip()
+        
+        # Strip surrounding matching quotes
+        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+            raw_val = val[1:-1]
+        else:
+            raw_val = val
+            
+        if raw_val.startswith("nv://") or raw_val.startswith("nvenv://"):
+            new_lines.append(line)
+            continue
+            
+        if raw_val:
+            vault.set(key, raw_val)
+            migrated_count += 1
+            indent = line[:len(line) - len(line.lstrip())]
+            new_lines.append(f"{indent}{key}=nv://{key}\n")
+        else:
+            new_lines.append(line)
+            
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+        
+    print(f"Successfully migrated {migrated_count} secret(s) from '{file_path}' into the nvenv vault.")
+    print(f"Updated '{file_path}' with nvenv:// URI placeholders.")
 
 def main():
     if len(sys.argv) < 2:
@@ -59,6 +113,50 @@ def main():
         except Exception as e:
             print(f"Error storing secret: {e}", file=sys.stderr)
             sys.exit(1)
+            
+    elif cmd == "import":
+        target_file = sys.argv[2] if len(sys.argv) > 2 else ".env"
+        import_env_file(target_file)
+        
+    elif cmd == "audit":
+        limit = 20
+        if "--limit" in sys.argv:
+            idx = sys.argv.index("--limit")
+            if idx + 1 < len(sys.argv):
+                try:
+                    limit = int(sys.argv[idx + 1])
+                except ValueError:
+                    pass
+                    
+        log_path = os.path.join(os.path.expanduser("~"), ".nv", "audit.log")
+        if not os.path.exists(log_path):
+            print("No audit log entries found at ~/.nv/audit.log")
+            sys.exit(0)
+            
+        with open(log_path, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f.readlines() if l.strip()]
+            
+        if not lines:
+            print("Audit log is empty.")
+            sys.exit(0)
+            
+        recent_lines = lines[-limit:]
+        print(f"Audit Log (Showing last {len(recent_lines)} of {len(lines)} events):\n")
+        for l in recent_lines:
+            try:
+                entry = json.loads(l)
+                ts = entry.get("timestamp", "")
+                st = entry.get("status", "").upper()
+                k = entry.get("key", "")
+                h = entry.get("host", "")
+                proc = entry.get("process_name", "")
+                print(f"  [{ts}] {st:<6} key='{k}' host='{h}' proc='{proc}'")
+            except Exception:
+                print(f"  {l}")
+                
+    elif cmd == "mcp":
+        from mcp_server import run_mcp_server
+        run_mcp_server()
             
     elif cmd == "list":
         try:
@@ -286,18 +384,25 @@ def main():
                         print("Error: Limit must be an integer.")
                         sys.exit(1)
             
-            policy = {}
+            from typing import Any
+
+            policy: dict[str, Any] = {}
+
             if hosts is not None:
                 policy["allowed_hosts"] = hosts
+
             if processes is not None:
                 policy["allowed_processes"] = processes
+
             if methods is not None:
                 policy["allowed_methods"] = methods
+
             if paths is not None:
                 policy["allowed_paths"] = paths
+
             if limit is not None:
                 policy["max_requests_per_minute"] = limit
-                
+
             policies = engine.config.setdefault("policies", {})
             policies[key] = policy
             

@@ -213,6 +213,18 @@ nvenv set OPENAI_API_KEY
 
 ---
 
+## ⚡ 1-Click `.env` Migration
+
+Migrate existing `.env` files automatically in one step:
+
+```bash
+nvenv import .env
+```
+
+This encrypts all raw values into the hardware-backed vault and rewrites `.env` with `nv://` URI placeholders.
+
+---
+
 ## Replace Your `.env`
 
 Instead of:
@@ -249,6 +261,28 @@ nvenv run -- python app.py
 
 ```bash
 nvenv list
+```
+
+---
+
+## 🤖 Model Context Protocol (MCP) Server for AI Agents
+
+Integrate directly with **Claude Code**, **Cursor**, and **OpenAI Agents**:
+
+```bash
+nvenv mcp
+```
+
+Provides a standard JSON-RPC 2.0 MCP interface so AI tools can inspect vault health and check security policies natively without gaining access to raw secret values.
+
+---
+
+## 📋 Security Audit Logging
+
+View recent execution and proxy request logs:
+
+```bash
+nvenv audit --limit 20
 ```
 
 ---
